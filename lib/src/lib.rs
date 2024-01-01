@@ -1,11 +1,18 @@
+mod models;
 mod my_titles;
 mod recommend;
 
-use my_titles::MyTitlesApp;
-use recommend::RecommendApp;
+use std::{
+    ops::DerefMut,
+    sync::{Arc, Mutex},
+};
+
+pub use my_titles::MyTitlesApp;
+use my_titles::Titles;
+pub use recommend::RecommendApp;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-enum Anchor {
+pub enum Anchor {
     MyTitles,
     Recommend,
 }
@@ -27,13 +34,18 @@ impl Default for Anchor {
         Self::MyTitles
     }
 }
+#[derive(Default, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ToStore {
+    pub selected_anchor: Anchor,
+    pub titles: Titles,
+    pub recommend: RecommendApp,
+}
 
-#[derive(Default, serde::Deserialize, serde::Serialize)]
-#[serde(default)]
 pub struct State {
-    selected_anchor: Anchor,
-    my_titles: MyTitlesApp,
-    recommend: RecommendApp,
+    pub selected_anchor: Anchor,
+    pub my_titles: MyTitlesApp,
+    pub recommend: RecommendApp,
+    pub toasts: Arc<Mutex<egui_notify::Toasts>>,
 }
 
 impl State {
@@ -56,12 +68,12 @@ impl State {
     fn apps_iter_mut(&mut self) -> impl Iterator<Item = (&str, Anchor, &mut dyn eframe::App)> {
         let vec = vec![
             (
-                "my titles",
+                "My Titles",
                 Anchor::MyTitles,
                 &mut self.my_titles as &mut dyn eframe::App,
             ),
             (
-                "recommend",
+                "Recommend",
                 Anchor::Recommend,
                 &mut self.recommend as &mut dyn eframe::App,
             ),
@@ -100,16 +112,6 @@ pub fn render(state: &mut State, ctx: &egui::Context, frame: &mut eframe::Frame)
         });
     });
 
-    // egui::CentralPanel::default().show(ctx, |ui| {
-    //     // The central panel the region left after adding TopPanel's and SidePanel's
-    //     ui.heading("Meepls");
-    //
-    //     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-    //         powered_by_egui_and_eframe(ui);
-    //         egui::warn_if_debug_build(ui);
-    //     });
-    // });
-
     egui::SidePanel::left("nav").show(ctx, |ui| {
         ui.vertical(|ui| {
             ui.visuals_mut().button_frame = false;
@@ -120,6 +122,7 @@ pub fn render(state: &mut State, ctx: &egui::Context, frame: &mut eframe::Frame)
         powered_by_egui_and_eframe(ui);
     });
     state.show_selected_app(ctx, frame);
+    state.toasts.lock().unwrap().deref_mut().show(ctx);
 }
 
 fn powered_by_egui_and_eframe(ui: &mut egui::Ui) {
