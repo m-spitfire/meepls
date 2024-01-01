@@ -35,6 +35,7 @@ impl MeeplsApp {
             selected_anchor: Anchor::default(),
             my_titles: MyTitlesApp {
                 titles: BTreeMap::new(),
+                input_id: String::new(),
                 toasts: Arc::clone(&toasts),
             },
             recommend: RecommendApp::default(),

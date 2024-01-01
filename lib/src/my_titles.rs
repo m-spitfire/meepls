@@ -16,6 +16,7 @@ pub type Titles = BTreeMap<String, Title>;
 
 pub struct MyTitlesApp {
     pub titles: Titles,
+    pub input_id: String,
     pub toasts: Arc<Mutex<Toasts>>,
 }
 
@@ -66,7 +67,108 @@ fn make_request<T: serde::de::DeserializeOwned + Send + 'static>(url: String) ->
     rx.recv().unwrap()
 }
 
+fn get_title_id_from_imdb(id: TitleId) -> Result<(i32, TitleType), ()> {
+    let result: tmdb::FindById = make_request(format!(
+        "https://api.themoviedb.org/3/find/{}?external_source=imdb_id",
+        id
+    ));
+    if result.movie_results.len() == 1 && result.tv_results.len() == 0 {
+        Ok((result.movie_results[0].id, TitleType::Movie))
+    } else if result.movie_results.len() == 0 && result.tv_results.len() == 1 {
+        Ok((result.movie_results[0].id, TitleType::Series))
+    } else {
+        Err(())
+    }
+}
+
+fn get_title_from_tmdb(id: i32, typ: TitleType, my_rating: Option<f32>) -> Title {
+    let detail_url = match typ {
+        TitleType::Movie => format!(
+            "https://api.themoviedb.org/3/movie/{id}?append_to_response=credits&language=en-US"
+        ),
+        TitleType::Series => format!(
+            "https://api.themoviedb.org/3/tv/{id}?append_to_response=credits&language=en-US"
+        ),
+    };
+    let details: tmdb::DetailWCredits = make_request(detail_url);
+    let directors = match typ {
+        TitleType::Movie => details
+            .credits
+            .crew
+            .into_iter()
+            .filter_map(|c| {
+                if c.job == "Director" {
+                    Some(c.name)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        TitleType::Series => details
+            .created_by
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect(),
+    };
+
+    let actors = details
+        .credits
+        .cast
+        .iter()
+        .take(3)
+        .map(|c| c.name.clone())
+        .collect();
+
+    let genres = details.genres.iter().map(|g| g.name.clone()).collect();
+
+    Title {
+        id: details.imdb_id.parse().unwrap(),
+        title: details.title,
+        year: details.release_date[..4].parse().unwrap(),
+        ty: typ,
+        rating: details.rating,
+        my_rating,
+        directors,
+        actors,
+        genres,
+        poster_img: details.poster_path,
+        description: details.overview,
+    }
+}
+
 impl MyTitlesApp {
+    fn add_movie_from_imdb(&mut self, id: TitleId, my_rating: Option<f32>) {
+        let (id, typ) = ok_or!(get_title_id_from_imdb(id), {
+            self.toasts
+                .lock()
+                .unwrap()
+                .deref_mut()
+                .error("Wrong IMDb ID");
+            return;
+        });
+
+        let title = get_title_from_tmdb(id, typ, my_rating);
+
+        self.titles.insert(title.title.clone(), title);
+    }
+
+    fn add_movie_from_input(&mut self) {
+        let id = ok_or!(self.input_id.parse(), {
+            self.toasts
+                .lock()
+                .unwrap()
+                .deref_mut()
+                .error("Wrong IMDb ID");
+            return;
+        });
+        self.add_movie_from_imdb(id, None);
+        self.toasts
+            .lock()
+            .unwrap()
+            .deref_mut()
+            .success("Added Movie!");
+    }
     fn import_from_path(&mut self, path: PathBuf) {
         let Ok(file) = File::open(path) else {
             return;
@@ -84,69 +186,7 @@ impl MyTitlesApp {
                     return;
                 }
             };
-
-            let result: tmdb::FindById = make_request(format!(
-                "https://api.themoviedb.org/3/find/{}?external_source=imdb_id",
-                record.id
-            ));
-
-            let id = match record.typ.into() {
-                // TODO: don't index, check if there's result
-                TitleType::Movie => result.movie_results[0].id,
-                TitleType::Series => result.tv_results[0].id,
-            };
-            let detail_url = match record.typ.into() {
-                TitleType::Movie => format!("https://api.themoviedb.org/3/movie/{id}?append_to_response=credits&language=en-US"),
-                TitleType::Series => format!("https://api.themoviedb.org/3/tv/{id}?append_to_response=credits&language=en-US"),
-            };
-            let details: tmdb::DetailWCredits = make_request(detail_url);
-            let directors = match record.typ.into() {
-                TitleType::Movie => details
-                    .credits
-                    .crew
-                    .into_iter()
-                    .filter_map(|c| {
-                        if c.job == "Director" {
-                            Some(c.name)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect(),
-                TitleType::Series => details
-                    .created_by
-                    .unwrap()
-                    .into_iter()
-                    .map(|c| c.name)
-                    .collect(),
-            };
-
-            let actors = details
-                .credits
-                .cast
-                .iter()
-                .take(3)
-                .map(|c| c.name.clone())
-                .collect();
-
-            let genres = details.genres.iter().map(|g| g.name.clone()).collect();
-
-            self.titles.insert(
-                details.title.clone(),
-                Title {
-                    id: record.id,
-                    title: details.title,
-                    year: details.release_date[..4].parse().unwrap(),
-                    ty: record.typ.into(),
-                    rating: details.rating,
-                    my_rating: record.rating,
-                    directors,
-                    actors,
-                    genres,
-                    poster_img: details.poster_path,
-                    description: details.overview,
-                },
-            );
+            self.add_movie_from_imdb(record.id, record.rating);
         }
     }
 }
@@ -178,6 +218,15 @@ impl eframe::App for MyTitlesApp {
                         }
                     }
                 });
+            });
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Add a movie");
+                let response =
+                    ui.add(egui::TextEdit::singleline(&mut self.input_id).hint_text("IMDb id"));
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    self.add_movie_from_input();
+                }
             });
             ui.separator();
             let mut to_remove = None;

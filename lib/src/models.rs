@@ -106,8 +106,6 @@ impl<'de> Deserialize<'de> for CsvTitleType {
 pub struct ImdbCsvRow {
     #[serde(rename = "Const")]
     pub id: TitleId,
-    #[serde(rename = "Title Type")]
-    pub typ: CsvTitleType,
     #[serde(rename = "Your Rating")]
     pub rating: Option<f32>,
 }
@@ -134,6 +132,7 @@ pub mod tmdb {
         pub release_date: String,
         #[serde(rename = "vote_average")]
         pub rating: f32,
+        pub imdb_id: String,
         pub credits: Credits,
         pub genres: Vec<Genre>,
         pub poster_path: String,
